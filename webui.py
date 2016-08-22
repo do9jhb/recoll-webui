@@ -7,13 +7,20 @@ import sys
 import datetime
 import glob
 import hashlib
-import json
 import csv
 import StringIO
 import ConfigParser
 import string
 import shlex
 import urllib
+
+# use ujson if avalible (faster than built in json)
+try:
+    import ujson as json
+except ImportError:
+    import json
+    print("ujson module not found! Consider installing it for improved Json generating speed!")
+
 # import recoll and rclextract
 try:
     from recoll import recoll
@@ -150,6 +157,16 @@ def get_query():
         'page': int(select([bottle.request.query.get('page'), 0])),
     }
     return query
+
+#}}}
+#{{{ get_pages
+def get_pages():
+    pages = {
+        'page': select([bottle.request.query.get('page'), 1]),
+        'items': select([bottle.request.query.get('items'), 50]),
+    }
+    return pages
+
 #}}}
 #{{{ query_to_recoll_string
 def query_to_recoll_string(q):
@@ -309,6 +326,48 @@ def edit(resnum):
     if pathismine:
         os.unlink(path)
     return f
+
+
+#}}}
+#{{{ recoll_search_pages
+def recoll_search_page(q, item_per_page=50, page=1, dosnippets=True):
+    config = get_config()
+    tstart = datetime.datetime.now()
+    results = []
+    query = recoll_initsearch(q)
+    nres = query.rowcount
+
+    item_per_page = int(item_per_page)
+    page = int(page)
+
+    offset = (page - 1) * item_per_page
+    try:
+        query.scroll(offset, mode='absolute')
+    except:
+        pass
+
+    highlighter = HlMeths()
+    for i in range(item_per_page):
+        try:
+            doc = query.fetchone()
+        except:
+            break
+        d = {}
+        for f in FIELDS:
+            v = getattr(doc, f)
+            if v is not None:
+                d[f] = v.encode('utf-8')
+            else:
+                d[f] = ''
+        d['label'] = select([d['title'], d['filename'], '?'], [None, ''])
+        d['sha'] = hashlib.sha1(d['url']+d['ipath']).hexdigest()
+        d['time'] = timestr(d['mtime'], config['timefmt'])
+        if dosnippets:
+            d['snippet'] = query.makedocabstract(doc, highlighter).encode('utf-8')
+        results.append(d)
+    tend = datetime.datetime.now()
+    return results, nres, tend - tstart
+
 #}}}
 #{{{ json
 @bottle.route('/json')
@@ -321,6 +380,22 @@ def get_json():
     res, nres, timer = recoll_search(query)
 
     return json.dumps({ 'query': query, 'results': res })
+
+
+#}}}
+#{{{ pagedjson
+@bottle.route('/pagedjson')
+def get_page_json():
+    query = get_query()
+    pages = get_pages()
+    query['page'] = pages['page']
+    qs = query_to_recoll_string(query)
+    bottle.response.headers['Content-Type'] = 'application/json'
+    bottle.response.headers['Content-Disposition'] = 'attachment; filename=recoll-%s.json' % normalise_filename(qs)
+    res, nres, timer = recoll_search_page(query,pages['items'],pages['page'])
+
+    return json.dumps({ 'query': query, 'results': res })
+
 #}}}
 #{{{ csv
 @bottle.route('/csv')
