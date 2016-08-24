@@ -1,6 +1,6 @@
-============
-Recoll WebUI
-============
+============================
+Recoll WebUI for Recolldroid
+============================
 
 **This is an modified Version for use with the Recolldroid android app. It adds an feature to export only a "page" of results to json
 and not all at once.**
